@@ -20,29 +20,40 @@ def golf_std_namespace(code: str) -> str:
 
 
 def golf_typedefs(code: str) -> str:
-    """对高频长类型名添加 #define 缩写（出现 ≥2 次时触发）。"""
+    """对高频长类型名添加 typedef 缩写（出现 ≥2 次时触发）。"""
     replacements = [
-        (r'\blong long\b',          'll',   '#define ll long long'),
-        (r'\bunsigned long long\b', 'ull',  '#define ull unsigned long long'),
-        (r'\blong double\b',        'ld',   '#define ld long double'),
-        (r'\bvector<int>\b',        'vi',   '#define vi vector<int>'),
-        (r'\bvector<ll>\b',         'vll',  '#define vll vector<ll>'),
-        (r'\bpair<int,int>\b',      'pii',  '#define pii pair<int,int>'),
-        (r'\bpair<ll,ll>\b',        'pll',  '#define pll pair<ll,ll>'),
+        (r'\blong long\b',          'll',   'typedef long long ll;'),
+        (r'\bunsigned long long\b', 'ull',  'typedef unsigned long long ull;'),
+        (r'\blong double\b',        'ld',   'typedef long double ld;'),
+        (r'\bvector<int>\b',        'vi',   'typedef vector<int> vi;'),
+        (r'\bvector<ll>\b',         'vll',  'typedef vector<ll> vll;'),
+        (r'\bpair<int,int>\b',      'pii',  'typedef pair<int,int> pii;'),
+        (r'\bpair<ll,ll>\b',        'pll',  'typedef pair<ll,ll> pll;'),
     ]
     defines_to_add = []
     for pattern, short, defline in replacements:
-        macro = defline.split()[1]
-        if re.search(r'\b' + re.escape(macro) + r'\b', code):
-            continue
-        if len(re.findall(pattern, code)) >= 2:
+        # 提取缩写名（typedef ... short;）
+        macro = defline.rstrip(';').split()[-1]
+        # 匹配已有的 typedef 或 #define 形式
+        existing_re = re.compile(
+            r'^[ \t]*(?:'
+            r'typedef\b[^\n]+\b' + re.escape(macro) + r'\s*;'
+            r'|#[ \t]*define[ \t]+' + re.escape(macro) + r'\b[^\n]*'
+            r')[ \t]*\n?',
+            re.MULTILINE,
+        )
+        existing = existing_re.search(code)
+        if existing:
+            # 已有定义：从原位删掉，稍后统一插到顶部
+            code = code[:existing.start()] + code[existing.end():]
+            defines_to_add.append(defline)
+        elif len(re.findall(pattern, code)) >= 2:
             defines_to_add.append(defline)
             code = re.sub(pattern, short, code)
     if defines_to_add:
-        last = max(
-            (m.end() for m in re.finditer(r'^#(?:include|define)\b.*$', code, re.MULTILINE)),
-            default=0,
-        )
+        # 插入点：文件顶部 include 块末尾
+        include_ends = [m.end() for m in re.finditer(r'^[ \t]*#[ \t]*include\b.*$', code, re.MULTILINE)]
+        last = include_ends[-1] if include_ends else 0
         code = code[:last] + '\n' + '\n'.join(defines_to_add) + '\n' + code[last:]
     return code
 

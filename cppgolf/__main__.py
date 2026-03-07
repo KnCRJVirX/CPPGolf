@@ -96,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help='单语句 if/for/while 去花括号')
     g2.add_argument('--shortcuts', dest='define_shortcuts', action='store_true',
                     help='高频 cout/cin 用 #define 缩写')
-    g2.add_argument('--rename', dest='rename_symbols', action='store_true',
-                    help='将用户变量/成员名压缩为短名（需要 tree-sitter-cpp）')
+    g2.add_argument('-no-rename', dest='no_rename_symbols', action='store_true',
+                    help='不将用户变量/成员名压缩为短名（需要 tree-sitter-cpp）')
 
     p.add_argument('--stats', action='store_true', help='显示压缩率统计')
     return p
@@ -124,7 +124,7 @@ def main():
         keep_inline=args.keep_inline,
         aggressive=args.aggressive,
         define_shortcuts=args.define_shortcuts,
-        rename_symbols=args.rename_symbols,
+        rename_symbols=not(args.no_rename_symbols),
     )
 
     def print_stats(final_size: int):

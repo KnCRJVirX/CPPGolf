@@ -1,2 +1,5 @@
-__pycache__/
+__pycache__
 .venv
+.vscode
+cppgolf.egg-info/
+dist/

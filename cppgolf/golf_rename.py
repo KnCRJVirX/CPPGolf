@@ -2,8 +2,10 @@
 golf_rename.py — Pass 5: 符号名压缩（tree-sitter AST 驱动）
 """
 import re
-import sys
 import itertools
+
+from tree_sitter import Language, Parser
+import tree_sitter_cpp as tscpp
 
 _DECLARATOR_CONTAINERS = frozenset({
     'init_declarator', 'pointer_declarator', 'reference_declarator',
@@ -11,6 +13,28 @@ _DECLARATOR_CONTAINERS = frozenset({
     'abstract_reference_declarator', 'abstract_array_declarator',
 })
 _MIN_RENAME_LEN = 2
+
+# C/C++ 保留关键字，生成短名时不得使用
+_CXX_KEYWORDS = frozenset({
+    # C keywords
+    'auto', 'break', 'case', 'char', 'const', 'continue', 'default',
+    'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto',
+    'if', 'inline', 'int', 'long', 'register', 'restrict', 'return',
+    'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef',
+    'union', 'unsigned', 'void', 'volatile', 'while',
+    # C++ keywords
+    'alignas', 'alignof', 'and', 'and_eq', 'asm', 'bitand', 'bitor',
+    'bool', 'catch', 'class', 'compl', 'concept', 'consteval', 'constexpr',
+    'constinit', 'co_await', 'co_return', 'co_yield', 'decltype', 'delete',
+    'explicit', 'export', 'false', 'friend', 'mutable', 'namespace',
+    'new', 'noexcept', 'not', 'not_eq', 'nullptr', 'operator', 'or',
+    'or_eq', 'private', 'protected', 'public', 'requires', 'static_assert',
+    'static_cast', 'dynamic_cast', 'reinterpret_cast', 'const_cast',
+    'template', 'this', 'thread_local', 'throw', 'true', 'try', 'typeid',
+    'typename', 'using', 'virtual', 'wchar_t', 'xor', 'xor_eq',
+    # common macros / built-ins that must not be shadowed
+    'NULL', 'TRUE', 'FALSE', 'EOF', 'stdin', 'stdout', 'stderr',
+})
 
 
 def _gen_short_names():
@@ -54,14 +78,20 @@ class _RenameCtx:
         return self.src[node.start_byte:node.end_byte].decode('utf-8')
 
     def _get_primary_type_name(self, node) -> str | None:
+        result = None
         for ch in node.children:
             if ch.type in ('type_identifier', 'primitive_type'):
-                return self.name_of(ch)
-            if ch.type == 'qualified_identifier':
+                result = self.name_of(ch)
+            elif ch.type == 'qualified_identifier':
                 for sub in reversed(ch.children):
                     if sub.type in ('identifier', 'type_identifier'):
-                        return self.name_of(sub)
-        return None
+                        result = self.name_of(sub); break
+            elif ch.type == 'ERROR':
+                # tree-sitter 遇到宏（如 F_BEGIN）时会把真正的类型包进 ERROR 节点
+                for sub in ch.children:
+                    if sub.type in ('type_identifier', 'identifier'):
+                        result = self.name_of(sub); break
+        return result
 
     def _is_qid_name(self, node) -> bool:
         par = node.parent
@@ -219,16 +249,82 @@ class _RenameCtx:
                             if vtype:
                                 return vtype
                             return self._extract_init_cast_type(child, var_name)
+                # function_definition：参数列表不在祖先链上，需主动下探
+                if node.type == 'function_definition':
+                    for child in node.children:
+                        if child.type in ('function_declarator', 'pointer_declarator',
+                                          'reference_declarator'):
+                            for sub in child.children:
+                                if sub.type == 'parameter_list':
+                                    for param in sub.children:
+                                        if param.type != 'parameter_declaration':
+                                            continue
+                                        vtype = self._get_primary_type_name(param)
+                                        if not vtype:
+                                            continue
+                                        for ch in param.children:
+                                            if ch.type == 'identifier' and self.name_of(ch) == var_name:
+                                                return vtype
+                                            elif ch.type in _DECLARATOR_CONTAINERS:
+                                                id_nd = _extract_declarator_id(ch, False)
+                                                if id_nd and self.name_of(id_nd) == var_name:
+                                                    return vtype
+            # for-range loop 变量：for (Type var : range)
+            if node.type == 'for_range_loop':
+                loop_type = self._get_primary_type_name(node)  # 直接子节点里找 type_identifier
+                found_first = False
+                for ch in node.children:
+                    if ch.type in (':', 'compound_statement'):
+                        break
+                    if ch.is_named and not found_first:
+                        found_first = True   # 跳过类型说明符节点本身
+                        continue
+                    if ch.type == 'identifier' and self.name_of(ch) == var_name:
+                        return loop_type
+                    elif ch.type in _DECLARATOR_CONTAINERS:
+                        id_nd = _extract_declarator_id(ch, False)
+                        if id_nd and self.name_of(id_nd) == var_name:
+                            return loop_type
+            # 类/结构体成员字段（方法内访问 this->field 或其他成员变量）
+            if node.type in ('struct_specifier', 'class_specifier', 'union_specifier'):
+                for ch in node.children:
+                    if ch.type == 'field_declaration_list':
+                        for fd in ch.children:
+                            if fd.type != 'field_declaration':
+                                continue
+                            vtype = self._get_primary_type_name(fd)
+                            for fc in fd.children:
+                                if fc.type == 'field_identifier' and self.name_of(fc) == var_name:
+                                    return vtype
+                                elif fc.type in _DECLARATOR_CONTAINERS or fc.type == 'init_declarator':
+                                    id_nd = _extract_declarator_id(fc, True)
+                                    if id_nd and self.name_of(id_nd) == var_name:
+                                        return vtype
+                        break
             node = node.parent
         return self.var_type_map.get(var_name)
 
     # ── 字段访问对象类型推断 ─────────────────────────────────────────────
+    def _enclosing_class(self, node) -> str | None:
+        """向上找最近的 class/struct/union 定义，返回其名字。"""
+        n = node.parent
+        while n is not None:
+            if n.type in ('struct_specifier', 'class_specifier', 'union_specifier'):
+                for ch in n.children:
+                    if ch.type == 'type_identifier':
+                        return self.name_of(ch)
+            n = n.parent
+        return None
+
     def _resolve_field_object_type(self, field_expr_node) -> str | None:
         if not field_expr_node.children:
             return None
         value_node = field_expr_node.children[0]
         vt = value_node.type
         td = self.typedef_map
+        if vt == 'this':
+            cls = self._enclosing_class(field_expr_node)
+            return td.get(cls, cls) if cls else None
         if vt == 'identifier':
             t = self._lookup_var_type_in_scope(value_node)
             return td.get(t, t)
@@ -407,14 +503,7 @@ class _RenameCtx:
 # 公开入口
 # ─────────────────────────────────────────────────────────────────────────────
 def golf_rename_symbols(code: str) -> str:
-    try:
-        from tree_sitter import Language, Parser
-        import tree_sitter_cpp as tscpp
-        _lang = Language(tscpp.language())
-    except ImportError:
-        print('[警告] 未找到 tree-sitter，跳过符号重命名。'
-              '  运行: pip install tree-sitter tree-sitter-cpp', file=sys.stderr)
-        return code
+    _lang = Language(tscpp.language())
 
     src_bytes = code.encode('utf-8')
     parser = Parser(_lang)
@@ -436,7 +525,7 @@ def golf_rename_symbols(code: str) -> str:
 
     # 步骤 4：生成重命名映射
     all_existing = set(re.findall(r'\b[A-Za-z_]\w*\b', code))
-    occupied = set(all_existing)
+    occupied = all_existing | _CXX_KEYWORDS
     rename_map: dict = {}
     gen = _gen_short_names()
     for original in sorted(all_targets, key=lambda x: -freq.get(x, 0)):
