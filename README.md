@@ -14,7 +14,7 @@ pip install cppgolf
 cppgolf solution.cpp                       # 输出到 stdout
 cppgolf solution.cpp -o golf.cpp           # 输出到文件
 cppgolf solution.cpp -I include/ -o out.cpp
-cppgolf solution.cpp --rename              # 符号压缩
+cppgolf solution.cpp --no-rename           # 不压缩符号
 ```
 
 ### 选项
@@ -33,7 +33,7 @@ cppgolf solution.cpp --rename              # 符号压缩
 | `--keep-inline` | 保留 `inline` 关键字 |
 | `--aggressive` | 去除单语句 if/for/while 花括号 |
 | `--shortcuts` | 高频 cout/cin → `#define` 缩写 |
-| `--rename` | 变量/成员名压缩为 a/b/aa/… |
+| `--no-rename` | 不对变量/成员名进行压缩 |
 | `--stats` | 显示压缩率统计 |
 
 ## Python API

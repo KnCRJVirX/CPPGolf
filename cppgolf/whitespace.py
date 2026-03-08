@@ -5,7 +5,9 @@ _IDENT_END   = re.compile(r'[A-Za-z0-9_]$')
 _IDENT_START = re.compile(r'^[A-Za-z0-9_]')
 
 # 完整预处理行（含续行 \）
-_PP_LINE_RE = re.compile(r'[ \t]*#[^\n]*(?:\\\n[^\n]*)*')
+# 注意：用 (?:[^\n\\]|\\.)* 代替 [^\n]* ，防止行末的 \ 被贪婪吞掉
+# 导致 (?:\\\n...) 无法匹配续行
+_PP_LINE_RE = re.compile(r'[ \t]*#(?:[^\n\\]|\\.)*(?:\\\n(?:[^\n\\]|\\.)*)*')
 
 # token 正则
 _TOKENIZE_RE = re.compile(
@@ -25,6 +27,7 @@ _TOKENIZE_RE = re.compile(
 
 
 def _needs_space(a: str, b: str) -> bool:
+    '''判断两个token之间是否需要空格'''
     if not a or not b:
         return False
     if _IDENT_END.search(a) and _IDENT_START.match(b):
@@ -37,13 +40,13 @@ def _needs_space(a: str, b: str) -> bool:
 def _tokenize(code: str) -> list:
     tokens = []
     for pp_ph, str_ph, num, ident, op, nl, sp in _TOKENIZE_RE.findall(code):
-        if   pp_ph:  tokens.append(('lit', pp_ph))
-        elif str_ph: tokens.append(('lit', str_ph))
-        elif num:    tokens.append(('num', num))
-        elif ident:  tokens.append(('id',  ident))
-        elif op:     tokens.append(('op',  op))
-        elif nl:     tokens.append(('nl',  '\n'))
-        elif sp:     tokens.append(('sp',  ' '))
+        if   pp_ph:  tokens.append(('lit', pp_ph))      # 预处理行占位符（\x01PP...\x01）
+        elif str_ph: tokens.append(('lit', str_ph))     # 字符串字面占位符（\x02S...\x02）
+        elif num:    tokens.append(('num', num))        # 整数字面量
+        elif ident:  tokens.append(('id',  ident))      # 标识符
+        elif op:     tokens.append(('op',  op))         # 运算符
+        elif nl:     tokens.append(('nl',  '\n'))       # 换行符
+        elif sp:     tokens.append(('sp',  ' '))        # 空白
     return tokens
 
 

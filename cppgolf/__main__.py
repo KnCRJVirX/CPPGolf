@@ -8,7 +8,7 @@ from .merge import merge_files
 from .whitespace import compress_whitespace
 from .transforms import (
     golf_std_namespace, golf_typedefs, golf_remove_main_return,
-    golf_endl_to_newline, golf_remove_inline,
+    golf_endl_to_newline, golf_remove_inline, golf_windows_lean,
     golf_braces_single_stmt, golf_define_shortcuts,
 )
 from .golf_rename import golf_rename_symbols
@@ -29,6 +29,7 @@ def process(
     aggressive: bool = False,
     define_shortcuts: bool = False,
     rename_symbols: bool = False,
+    rename_functions: bool = False,
 ) -> str:
     sys_includes: list = []
     visited: set = set()
@@ -52,12 +53,13 @@ def process(
         code = golf_remove_main_return(code)
     if not keep_inline:
         code = golf_remove_inline(code)
+    code = golf_windows_lean(code)
     if aggressive:
         code = golf_braces_single_stmt(code)
     if define_shortcuts:
         code = golf_define_shortcuts(code)
     if rename_symbols:
-        code = golf_rename_symbols(code)
+        code = golf_rename_symbols(code, rename_functions=rename_functions)
 
     if not no_compress_ws:
         code = compress_whitespace(code)
@@ -87,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument('--no-compress-ws',    action='store_true', help='保留空白格式')
     g.add_argument('--no-std-ns',         action='store_true', help='不添加 using namespace std')
     g.add_argument('--no-typedefs',       action='store_true', help='不添加 ll/ld 等类型宏')
+    g.add_argument('--no-rename',         action='store_true', help='不将用户变量/成员名压缩为短名')
     g.add_argument('--keep-main-return',  action='store_true', help='保留 main 末尾 return 0')
     g.add_argument('--keep-endl',         action='store_true', help='保留 endl')
     g.add_argument('--keep-inline',       action='store_true', help='保留 inline 关键字')
@@ -96,9 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help='单语句 if/for/while 去花括号')
     g2.add_argument('--shortcuts', dest='define_shortcuts', action='store_true',
                     help='高频 cout/cin 用 #define 缩写')
-    g2.add_argument('-no-rename', dest='no_rename_symbols', action='store_true',
-                    help='不将用户变量/成员名压缩为短名（需要 tree-sitter-cpp）')
-
+    g2.add_argument('--rename-functions', dest='rename_functions', action='store_true',
+                    help='重命名用户定义的自由函数和成员函数（不含构造/析构/main）')
     p.add_argument('--stats', action='store_true', help='显示压缩率统计')
     return p
 
@@ -124,7 +126,8 @@ def main():
         keep_inline=args.keep_inline,
         aggressive=args.aggressive,
         define_shortcuts=args.define_shortcuts,
-        rename_symbols=not(args.no_rename_symbols),
+        rename_symbols=not(args.no_rename),
+        rename_functions=args.rename_functions,
     )
 
     def print_stats(final_size: int):
