@@ -34,15 +34,30 @@ def merge_files(filepath: Path, include_dirs: list,
     code = strip_include_guard(code)
     parts = []
 
+    # 跟踪预处理条件块嵌套深度：depth > 0 表示当前在 #if/#ifdef/#ifndef 内部
+    # 处于条件块内的 #include <...> 必须保留在原位，不能提升到文件顶部
+    cond_depth = 0
+
     for line in code.splitlines(keepends=True):
         s = line.strip()
+
+        # 更新条件块深度
+        if re.match(r'#\s*if(?:def|ndef)?\b', s):
+            cond_depth += 1
+        elif re.match(r'#\s*endif\b', s):
+            cond_depth = max(0, cond_depth - 1)
 
         # 系统头文件 #include <...>
         m_sys = re.match(r'#\s*include\s*<([^>]+)>', s)
         if m_sys:
-            entry = f'#include <{m_sys.group(1)}>\n'
-            if entry not in sys_includes:
-                sys_includes.append(entry)
+            if cond_depth > 0:
+                # 在条件块内：保留在原位，维持条件上下文
+                parts.append(line)
+            else:
+                # 无条件引用：提升到文件顶部统一去重管理
+                entry = f'#include <{m_sys.group(1)}>\n'
+                if entry not in sys_includes:
+                    sys_includes.append(entry)
             continue
 
         # 本地头文件 #include "..."
@@ -55,9 +70,13 @@ def merge_files(filepath: Path, include_dirs: list,
                 if c.exists():
                     found = c; break
             if found:
-                parts.append(f'\n// ── inlined: {inc} ──\n')
-                parts.append(merge_files(found, include_dirs, visited, sys_includes))
-                parts.append(f'\n// ── end: {inc} ──\n')
+                if cond_depth > 0:
+                    # 在条件块内：不内联，保留原始 include 行
+                    parts.append(line)
+                else:
+                    parts.append(f'\n// ── inlined: {inc} ──\n')
+                    parts.append(merge_files(found, include_dirs, visited, sys_includes))
+                    parts.append(f'\n// ── end: {inc} ──\n')
             else:
                 print(f'[警告] 找不到本地头文件：{inc}', file=sys.stderr)
                 parts.append(line)

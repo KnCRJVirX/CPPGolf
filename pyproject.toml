@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cppgolf"
-version = "0.1.1"
+version = "0.1.2"
 description = "C++ multi-file merge & code golf / minifier tool"
 readme = "README.md"
 license = { text = "MIT" }
@@ -24,8 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "tree-sitter>=0.25",
-    "tree-sitter-cpp>=0.23",
+    "libclang",
 ]
 
 [project.optional-dependencies]
@@ -39,8 +38,8 @@ dev = [
 cppgolf = "cppgolf.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/yourname/cppgolf"
-Issues   = "https://github.com/yourname/cppgolf/issues"
+Homepage = "https://github.com/KnCRJVirX/cppgolf"
+Issues   = "https://github.com/KnCRJVirX/cppgolf/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
