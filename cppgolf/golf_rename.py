@@ -199,11 +199,11 @@ def walk_ast(
                 pass
         if kind in decl_kinds:
             # 跳过 virtual 方法（含 override）的参数：
-            # virtual 方法参数名常被宏体硬编码依赖（如 XRPC 的 SetAttr/GetArg 等），
+            # virtual 方法参数名常被宏体硬编码依赖
             # 不同 override 对同名参数各自分配不同短名，宏展开时会产生"未声明"错误。
             # 统一不重命名 virtual 方法参数，保持宏约定不被破坏。
             if kind.name == 'PARM_DECL':  # type: ignore
-                parent = cursor.semantic_parent
+                parent: ci.Cursor = cursor.semantic_parent
                 if parent is not None and parent.is_virtual_method():
                     # 不加入 decl_map，但将声明位置加入 replacements。
                     # replacements 中有该 offset 后，merge_token_candidates 的 ast_seen
@@ -681,7 +681,7 @@ def apply_replacements(
     return result.decode('utf-8')
 
 
-def golf_rename_symbols(code: str, rename_functions: bool = False) -> str:
+def golf_rename_symbols(code: str, rename_functions: bool = False, verbose: bool = False) -> str:
     """使用 libclang 对 C++ 代码做符号名压缩。
 
     重命名范围：局部变量、函数参数、结构体/类字段（仅用户代码中定义的）。
@@ -793,6 +793,11 @@ def golf_rename_symbols(code: str, rename_functions: bool = False) -> str:
 
         # 生成 USR→短名 映射，以及名字单义查找表（供策略2使用）
         rename_map, name_to_usr = build_rename_map(decl_map, replacements, code)
+
+        if verbose:
+            for usr, short in sorted(rename_map.items(), key=lambda kv: decl_map[kv[0]][1]):
+                orig = decl_map[usr][0]
+                print(f'[golf_rename] {orig} → {short}', file=_sys.stderr)
 
         # 后处理 name_to_usr：若某个名字在 token_candidates 里出现过 _VIRT_PARM_SENTINEL，
         # 说明该名字在 virtual 方法里也被用作参数（不重命名），不能通过策略2单义推断——

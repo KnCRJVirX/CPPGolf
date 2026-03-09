@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cppgolf"
-version = "0.1.6"
+version = "0.1.8"
 description = "C++ multi-file merge & code golf / minifier tool"
 readme = "README.md"
 license = { text = "MIT" }

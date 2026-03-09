@@ -28,12 +28,14 @@ cppgolf solution.cpp --no-rename           # 不压缩符号
 | `--no-compress-ws` | 保留空白格式 |
 | `--no-std-ns` | 不添加 `using namespace std` |
 | `--no-typedefs` | 不添加 `ll`/`ld` 等类型宏 |
+| `--no-rename` | 不对变量/成员名进行压缩 |
 | `--keep-main-return` | 保留 `return 0;` |
 | `--keep-endl` | 保留 `endl` |
 | `--keep-inline` | 保留 `inline` 关键字 |
 | `--aggressive` | 去除单语句 if/for/while 花括号 |
 | `--shortcuts` | 高频 cout/cin → `#define` 缩写 |
-| `--no-rename` | 不对变量/成员名进行压缩 |
+| `--rename-function` | 压缩函数名到短名 |
+| `--rename-type` | 压缩类型名到短名 |
 | `--stats` | 显示压缩率统计 |
 
 ## Python API
@@ -67,4 +69,4 @@ code = compress_whitespace(code)
 - **去注释**：状态机感知字符串，支持 `//`、`/* */`、原始字符串 `R"(...)"` 
 - **语义压缩**：`std::` 消除、`long long→ll` 宏、`endl→"\n"`、去 `return 0;`、去 `inline`
 - **空白压缩**：token 级最小化，代码压为单行，预处理行保留换行
-- **符号重命名**：tree-sitter AST 驱动，仅重命名用户自定义变量/参数/成员名，不碰函数名/类型名/命名空间
+- **符号重命名**：libclang 驱动，重命名用户自定义变量/参数/成员名，可选重命名函数名
