@@ -1,241 +1,360 @@
-"""transforms.py — 语义级高尔夫变换（std::、typedef、endl、inline、braces、shortcuts）"""
+"""Semantic text transforms used by the default pipeline."""
+
+from __future__ import annotations
+
 import re
+
+from ._literals import mask_literals, restore_literals
+
+
+_PREPROCESSOR_RE = re.compile(r"^[ \t]*#[ \t]*(\w+).*$", re.MULTILINE)
+_PREPROCESSOR_BLOCK_RE = re.compile(r"[ \t]*#(?:[^\n\\]|\\.)*(?:\\\n(?:[^\n\\]|\\.)*)*")
+_STD_NAMESPACE_UNSAFE_RE = re.compile(
+    r"(^|\n)[ \t]*using\s+std::"
+    r"|(^|\n)[ \t]*(?:struct|class)\s+std::"
+    r"|\bstd::(?:mutex|recursive_mutex|timed_mutex|shared_mutex)\b"
+    r"|\bstd::(?:unique_lock|lock_guard|scoped_lock)\s*<"
+    r"|\bstd::hash\s*<",
+    re.MULTILINE,
+)
+_WARNING_PRAGMAS = (
+    '#if defined(__GNUC__)\n'
+    '#pragma GCC diagnostic ignored "-Wmisleading-indentation"\n'
+    '#pragma GCC diagnostic ignored "-Wunused-function"\n'
+    '#pragma GCC diagnostic ignored "-Wunused-variable"\n'
+    '#pragma GCC diagnostic ignored "-Wunused-but-set-variable"\n'
+    '#pragma GCC diagnostic ignored "-Wunused-local-typedefs"\n'
+    '#pragma GCC diagnostic ignored "-Wunused-value"\n'
+    '#pragma GCC diagnostic ignored "-Wignored-attributes"\n'
+    '#pragma GCC diagnostic ignored "-Wreturn-type"\n'
+    '#pragma GCC diagnostic ignored "-Wuninitialized"\n'
+    '#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"\n'
+    '#pragma GCC diagnostic ignored "-Waggressive-loop-optimizations"\n'
+    '#pragma GCC diagnostic ignored "-Warray-bounds"\n'
+    '#pragma GCC diagnostic ignored "-Wshift-count-overflow"\n'
+    '#pragma GCC diagnostic ignored "-Wstrict-overflow"\n'
+    '#pragma GCC diagnostic ignored "-Wtype-limits"\n'
+    "#endif\n"
+)
 
 
 def golf_std_namespace(code: str) -> str:
-    """无条件在最后一个顶层 #include 之后插入 using namespace std;，并删除所有 std:: 前缀。
+    """Insert `using namespace std;` after includes and drop `std::` prefixes."""
+    if _STD_NAMESPACE_UNSAFE_RE.search(code):
+        return code
 
-    - 先移除代码中已有的 using namespace std;（避免重复）。
-    - 只扫描 #if/#ifdef/#ifndef 条件块之外（深度=0）的 #include 行作为候选插入点，
-      避免把 #ifdef _WIN32 / #include <windows.h> 误认为"最后一个 include"。
-    - 若无顶层 #include 则退回全局最后一个 #include；若仍无则插到文件开头。
-    - 移除所有 std:: 前缀。
-    """
-    # 移除已有的 using namespace std;（可能在任意位置）
-    code = re.sub(r'[ \t]*using\s+namespace\s+std\s*;\n?', '', code)
+    masked, literals = mask_literals(code)
+    masked = re.sub(r"[ \t]*using\s+namespace\s+std\s*;\n?", "", masked)
 
-    # 扫描所有预处理行，跟踪 #if 深度，只记录深度=0 的 #include 末尾位置
-    pp_re = re.compile(r'^[ \t]*#[ \t]*(\w+).*$', re.MULTILINE)
-    depth = 0
-    top_level_include_ends: list[int] = []
-    all_include_ends: list[int] = []
-    for m in pp_re.finditer(code):
-        directive = m.group(1).lower()
-        if directive in ('if', 'ifdef', 'ifndef'):
-            depth += 1
-        elif directive == 'endif':
-            depth = max(0, depth - 1)
-        elif directive == 'include':
-            all_include_ends.append(m.end())
-            if depth == 0:
-                top_level_include_ends.append(m.end())
+    insert_at = _find_include_insert_pos(masked)
+    masked = masked[:insert_at] + "\nusing namespace std;" + masked[insert_at:]
+    masked = re.sub(r"\bstd::", "", masked)
+    return restore_literals(masked, literals)
 
-    insert_at = (top_level_include_ends[-1] if top_level_include_ends
-                 else all_include_ends[-1] if all_include_ends
-                 else 0)
-    code = code[:insert_at] + '\nusing namespace std;' + code[insert_at:]
 
-    # 删除所有 std:: 前缀
-    return re.sub(r'\bstd::', '', code)
+def inject_warning_pragmas(code: str) -> str:
+    """Add GCC-compatible pragmas for noisy generated-code warnings."""
+    if '#pragma GCC diagnostic ignored "-Wmisleading-indentation"' in code:
+        return code
+    return _WARNING_PRAGMAS + code
 
 
 def golf_typedefs(code: str) -> str:
-    """对高频长类型名添加 typedef 缩写（出现 ≥2 次时触发）。"""
+    """Add typedef shortcuts for common long type spellings."""
+    masked, literals = mask_literals(code)
     replacements = [
-        (r'\blong long\b',          'll',   'typedef long long ll;'),
-        (r'\bunsigned long long\b', 'ull',  'typedef unsigned long long ull;'),
-        (r'\blong double\b',        'ld',   'typedef long double ld;'),
-        (r'\bvector<int>\b',        'vi',   'typedef vector<int> vi;'),
-        (r'\bvector<ll>\b',         'vll',  'typedef vector<ll> vll;'),
-        (r'\bpair<int,int>\b',      'pii',  'typedef pair<int,int> pii;'),
-        (r'\bpair<ll,ll>\b',        'pll',  'typedef pair<ll,ll> pll;'),
+        (r"\bunsigned long long\b", "ull", "typedef unsigned long long ull;"),
+        (r"\blong long\b", "ll", "typedef long long ll;"),
+        (r"\blong double\b", "ld", "typedef long double ld;"),
+        (r"\bvector<int>", "vi", "typedef vector<int> vi;"),
+        (r"\bvector<ll>", "vll", "typedef vector<ll> vll;"),
+        (r"\bpair<int,int>", "pii", "typedef pair<int,int> pii;"),
+        (r"\bpair<ll,ll>", "pll", "typedef pair<ll,ll> pll;"),
     ]
-    defines_to_add = []
-    for pattern, short, defline in replacements:
-        # 提取缩写名（typedef ... short;）
-        macro = defline.rstrip(';').split()[-1]
-        # 匹配已有的 typedef 或 #define 形式
+
+    typedefs_to_add: list[str] = []
+    for pattern, short_name, typedef_line in replacements:
+        alias = typedef_line.rstrip(";").split()[-1]
         existing_re = re.compile(
-            r'^[ \t]*(?:'
-            r'typedef\b[^\n]+\b' + re.escape(macro) + r'\s*;'
-            r'|#[ \t]*define[ \t]+' + re.escape(macro) + r'\b[^\n]*'
-            r')[ \t]*\n?',
+            r"^[ \t]*(?:"
+            r"typedef\b[^\n]+\b" + re.escape(alias) + r"\s*;"
+            r"|#[ \t]*define[ \t]+" + re.escape(alias) + r"\b[^\n]*"
+            r")[ \t]*\n?",
             re.MULTILINE,
         )
-        existing = existing_re.search(code)
+        existing = existing_re.search(masked)
         if existing:
-            # 已有定义：从原位删掉，稍后统一插到顶部
-            code = code[:existing.start()] + code[existing.end():]
-            defines_to_add.append(defline)
-        elif len(re.findall(pattern, code)) >= 2:
-            defines_to_add.append(defline)
-            code = re.sub(pattern, short, code)
-    if defines_to_add:
-        # 插入点：文件顶部 include 块末尾（仅顶层 #include，不计 #ifdef 内的）
-        pp_re2 = re.compile(r'^[ \t]*#[ \t]*(\w+).*$', re.MULTILINE)
-        depth2 = 0
-        top_inc_ends: list[int] = []
-        all_inc_ends: list[int] = []
-        for m in pp_re2.finditer(code):
-            d = m.group(1).lower()
-            if d in ('if', 'ifdef', 'ifndef'):
-                depth2 += 1
-            elif d == 'endif':
-                depth2 = max(0, depth2 - 1)
-            elif d == 'include':
-                all_inc_ends.append(m.end())
-                if depth2 == 0:
-                    top_inc_ends.append(m.end())
-        last = (top_inc_ends[-1] if top_inc_ends
-                else all_inc_ends[-1] if all_inc_ends
-                else 0)
-        code = code[:last] + '\n' + '\n'.join(defines_to_add) + '\n' + code[last:]
-    return code
+            masked = masked[:existing.start()] + masked[existing.end():]
+            typedefs_to_add.append(typedef_line)
+            masked = _replace_type_pattern(masked, pattern, short_name, skip_neighbor_words={"unsigned", "signed"} if short_name == "ll" else set())
+            continue
+
+        if len(re.findall(pattern, masked)) >= 2:
+            typedefs_to_add.append(typedef_line)
+            masked = _replace_type_pattern(masked, pattern, short_name, skip_neighbor_words={"unsigned", "signed"} if short_name == "ll" else set())
+
+    if typedefs_to_add:
+        insert_at = _find_include_insert_pos(masked)
+        masked = masked[:insert_at] + "\n" + "\n".join(typedefs_to_add) + "\n" + masked[insert_at:]
+
+    return restore_literals(masked, literals)
+
+
+def _replace_type_pattern(
+    text: str,
+    pattern: str,
+    replacement: str,
+    *,
+    skip_neighbor_words: set[str] | None = None,
+) -> str:
+    skip_neighbor_words = skip_neighbor_words or set()
+    regex = re.compile(pattern)
+
+    def _replace(match: re.Match[str]) -> str:
+        if skip_neighbor_words:
+            prev_word = _neighbor_word(text, match.start(), backward=True)
+            if prev_word in skip_neighbor_words:
+                return match.group(0)
+            next_word = _neighbor_word(text, match.end(), backward=False)
+            if next_word in skip_neighbor_words:
+                return match.group(0)
+        return replacement
+
+    return regex.sub(_replace, text)
+
+
+def _neighbor_word(text: str, index: int, *, backward: bool) -> str | None:
+    if backward:
+        prefix = text[:index]
+        match = re.search(r"([A-Za-z_]\w*)\s*$", prefix)
+    else:
+        suffix = text[index:]
+        match = re.match(r"\s*([A-Za-z_]\w*)", suffix)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def golf_remove_main_return(code: str) -> str:
-    """移除 main 末尾的 return 0;（C++ 标准允许省略）。"""
-    return re.sub(
-        r'(int\s+main\s*\([^)]*\)\s*\{.*?)(\s*return\s+0\s*;\s*)(\})',
-        lambda m: m.group(1) + '\n' + m.group(3),
-        code, flags=re.DOTALL,
-    )
+    """Remove the trailing top-level `return 0;` from `int main(...)`."""
+    masked, literals = mask_literals(code)
+    main_re = re.compile(r"\bint\s+main\s*\(")
+
+    search_start = 0
+    while True:
+        match = main_re.search(masked, search_start)
+        if match is None:
+            return restore_literals(masked, literals)
+
+        open_paren = masked.find("(", match.start())
+        close_paren = _find_matching(masked, open_paren, "(", ")")
+        if close_paren < 0:
+            return restore_literals(masked, literals)
+
+        body_start = close_paren + 1
+        while body_start < len(masked) and masked[body_start].isspace():
+            body_start += 1
+        if body_start >= len(masked) or masked[body_start] != "{":
+            search_start = match.end()
+            continue
+
+        body_end = _find_matching(masked, body_start, "{", "}")
+        if body_end < 0:
+            return restore_literals(masked, literals)
+
+        inner_start = body_start + 1
+        trailing_return = re.search(r"\breturn\s+0\s*;\s*$", masked[inner_start:body_end])
+        if trailing_return is None:
+            search_start = body_end + 1
+            continue
+
+        remove_start = inner_start + trailing_return.start()
+        if _brace_depth(masked, inner_start, remove_start) != 0:
+            search_start = body_end + 1
+            continue
+
+        line_start = masked.rfind("\n", inner_start, remove_start)
+        if line_start >= 0 and not masked[line_start + 1:remove_start].strip():
+            remove_start = line_start + 1
+
+        masked = masked[:remove_start] + masked[body_end:]
+        return restore_literals(masked, literals)
 
 
 def golf_endl_to_newline(code: str) -> str:
-    r"""将 endl 替换为 '\n'（避免 flush，且更短）。"""
-    nl_str = r'"\n"'
-    code = re.sub(r'<<\s*endl\b', lambda _: '<< ' + nl_str, code)
-    code = re.sub(r'\bendl\b(?=\s*[;,)])', lambda _: nl_str, code)
-    return code
+    r"""Replace `endl` with `"\n"`."""
+    masked, literals = mask_literals(code)
+    newline_literal = r'"\n"'
+    masked = re.sub(r"<<\s*(?:std::)?endl\b", lambda _: "<<" + newline_literal, masked)
+    masked = re.sub(r"(?<!\w)(?:std::)?endl\b(?=\s*[;,)])", lambda _: newline_literal, masked)
+    return restore_literals(masked, literals)
 
 
 def golf_remove_inline(code: str) -> str:
-    """移除 inline，保留 inline static（C++17 内联静态成员变量）。"""
-    return re.sub(r'\binline\s+(?!static\b)', '', code)
+    """Remove `inline`, except for `inline static`."""
+    masked, literals = mask_literals(code)
+    masked, preprocessor_blocks = _mask_preprocessor(masked)
+    masked = re.sub(r"\binline[ \t]+(?!static\b)", "", masked)
+    masked = _restore_preprocessor(masked, preprocessor_blocks)
+    return restore_literals(masked, literals)
 
 
 def golf_windows_lean(code: str) -> str:
-    """当代码包含任意 Windows SDK 入口头文件时，自动在其前面插入两个防冲突宏定义。
-
-    1. WIN32_LEAN_AND_MEAN —— 阻止 winscard.h → wtypes.h → rpcndr.h 链。
-    2. _HAS_STD_BYTE 0    —— 禁用 <cstddef> 的 std::byte，彻底消除与
-       rpcndr.h / winternl.h 等路径引入的全局 byte typedef 的歧义。
-
-    覆盖的 Windows SDK 入口头：windows.h, winsock2.h, winsock.h,
-    winternl.h, ws2tcpip.h（及大小写变体）。
-    若代码中已有对应宏则跳过对应部分，但两者独立判断。
-    """
-    # 匹配常见 Windows SDK 入口头（任意大小写变体）
-    _WIN_HDR_RE = re.compile(
-        r'[ \t]*#[ \t]*include[ \t]*<'
-        r'(?:[Ww]indows|[Ww]in[Ss]ock2?|[Ww]internl|[Ww]s2tcpip)'
-        r'\.h>'
+    """Inject Windows header conflict guards before common SDK headers."""
+    window_header_re = re.compile(
+        r"[ \t]*#[ \t]*include[ \t]*<"
+        r"(?:[Ww]indows|[Ww]in[Ss]ock2?|[Ww]internl|[Ww]s2tcpip)\.h>"
     )
-    win_m = _WIN_HDR_RE.search(code)
-    if not win_m:
+    match = window_header_re.search(code)
+    if match is None:
         return code
-    insert_pos = win_m.start()
 
-    inject = ''
-    if 'WIN32_LEAN_AND_MEAN' not in code:
-        inject += '#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n'
-    if '_HAS_STD_BYTE' not in code:
-        inject += '#ifndef _HAS_STD_BYTE\n#define _HAS_STD_BYTE 0\n#endif\n'
+    inject = ""
+    if "WIN32_LEAN_AND_MEAN" not in code:
+        inject += "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
+    if "_HAS_STD_BYTE" not in code:
+        inject += "#ifndef _HAS_STD_BYTE\n#define _HAS_STD_BYTE 0\n#endif\n"
 
     if not inject:
         return code
-    return code[:insert_pos] + inject + code[insert_pos:]
+    return code[:match.start()] + inject + code[match.start():]
 
 
 def golf_braces_single_stmt(code: str) -> str:
-    """（激进）移除单条语句 if/for/while 的花括号。
+    """Remove braces from single-statement if/for/while bodies."""
+    masked, literals = mask_literals(code)
+    keyword_re = re.compile(r"\b(if|for|while)\s*")
 
-    使用括号计数扫描，支持任意深度嵌套，不依赖正则深度限制。
-    """
-    def _match_bracket(s: str, pos: int, open_ch: str, close_ch: str) -> int:
-        """从 pos（open_ch 处）扫描，返回对应 close_ch 之后的位置。"""
-        depth = 0
-        i = pos
-        n = len(s)
-        while i < n:
-            c = s[i]
-            if c == open_ch:
-                depth += 1
-            elif c == close_ch:
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            i += 1
-        return n  # 未找到匹配（不合法输入）
-
-    kw_re = re.compile(r'\b(if|for|while)\s*')
-    result: list[str] = []
+    parts: list[str] = []
     i = 0
-    n = len(code)
+    n = len(masked)
     while i < n:
-        m = kw_re.search(code, i)
-        if not m:
-            result.append(code[i:])
+        match = keyword_re.search(masked, i)
+        if match is None:
+            parts.append(masked[i:])
             break
 
-        result.append(code[i:m.start()])
-        kw = m.group(1)
-        pos = m.end()  # 紧接关键字+空白之后
-
-        # 必须紧跟 '('
-        if pos >= n or code[pos] != '(':
-            result.append(m.group(0))
-            i = m.end()
+        parts.append(masked[i:match.start()])
+        keyword = match.group(1)
+        open_paren = match.end()
+        if open_paren >= n or masked[open_paren] != "(":
+            parts.append(match.group(0))
+            i = match.end()
             continue
 
-        # 找条件括号的匹配 ')'
-        cond_end = _match_bracket(code, pos, '(', ')')
-        cond = code[pos:cond_end]
-
-        # 跳过空白
-        k = cond_end
-        while k < n and code[k] in ' \t\n':
-            k += 1
-
-        # 必须紧跟 '{'
-        if k >= n or code[k] != '{':
-            result.append(m.group(0))
-            i = m.end()
+        close_paren = _find_matching(masked, open_paren, "(", ")")
+        if close_paren < 0:
+            parts.append(match.group(0))
+            i = match.end()
             continue
 
-        # 找函数体括号的匹配 '}'
-        body_end = _match_bracket(code, k, '{', '}')
-        body = code[k + 1:body_end - 1].strip()
+        body_start = close_paren + 1
+        while body_start < n and masked[body_start] in " \t\n":
+            body_start += 1
+        if body_start >= n or masked[body_start] != "{":
+            parts.append(match.group(0))
+            i = match.end()
+            continue
 
-        # 只处理：函数体内无嵌套花括号、且恰好是单条分号结尾语句
-        if '{' not in body and '}' not in body and body.count(';') == 1 and body.endswith(';'):
-            result.append(f'{kw}{cond}{body}')
-            i = body_end
-        else:
-            result.append(m.group(0))
-            i = m.end()
+        body_end = _find_matching(masked, body_start, "{", "}")
+        if body_end < 0:
+            parts.append(match.group(0))
+            i = match.end()
+            continue
 
-    return ''.join(result)
+        body = masked[body_start + 1:body_end].strip()
+        if "{" not in body and "}" not in body and body.count(";") == 1 and body.endswith(";"):
+            condition = masked[open_paren:close_paren + 1]
+            parts.append(f"{keyword}{condition}{body}")
+            i = body_end + 1
+            continue
+
+        parts.append(match.group(0))
+        i = match.end()
+
+    return restore_literals("".join(parts), literals)
 
 
 def golf_define_shortcuts(code: str) -> str:
-    """高频（≥5次）cout/cin 生成 #define 缩写。"""
+    """Insert shortcut defines for frequently used `cout`/`cin`."""
+    masked, literals = mask_literals(code)
     shortcuts = [
-        (r'\bcout\b', 'co', '#define co cout'),
-        (r'\bcin\b',  'ci', '#define ci cin'),
+        (r"\bcout\b", "co", "#define co cout"),
+        (r"\bcin\b", "ci", "#define ci cin"),
     ]
-    defines_to_add = []
-    for pattern, short, defline in shortcuts:
-        if re.search(re.escape(defline), code):
+
+    defines_to_add: list[str] = []
+    for pattern, short_name, define_line in shortcuts:
+        if define_line in masked:
             continue
-        if len(re.findall(pattern, code)) >= 5:
-            defines_to_add.append(defline)
-            code = re.sub(pattern, short, code)
+        if len(re.findall(pattern, masked)) >= 5:
+            defines_to_add.append(define_line)
+            masked = re.sub(pattern, short_name, masked)
+
     if defines_to_add:
-        last = max(
-            (m.end() for m in re.finditer(r'^#(?:include|define)\b.*$', code, re.MULTILINE)),
+        insert_at = max(
+            (match.end() for match in re.finditer(r"^#(?:include|define)\b.*$", masked, re.MULTILINE)),
             default=0,
         )
-        code = code[:last] + '\n' + '\n'.join(defines_to_add) + '\n' + code[last:]
-    return code
+        masked = masked[:insert_at] + "\n" + "\n".join(defines_to_add) + "\n" + masked[insert_at:]
+
+    return restore_literals(masked, literals)
+
+
+def _find_include_insert_pos(code: str) -> int:
+    offset = 0
+    last_include_end = 0
+
+    for line in code.splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            offset += len(line)
+            continue
+
+        match = _PREPROCESSOR_RE.match(line)
+        if match is None:
+            break
+
+        if match.group(1).lower() == "include":
+            last_include_end = offset + len(line.rstrip("\r\n"))
+        offset += len(line)
+
+    return last_include_end
+
+
+def _find_matching(code: str, start: int, open_char: str, close_char: str) -> int:
+    depth = 0
+    for index in range(start, len(code)):
+        char = code[index]
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _brace_depth(code: str, start: int, end: int) -> int:
+    depth = 0
+    for char in code[start:end]:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
+    return depth
+
+
+def _mask_preprocessor(code: str) -> tuple[str, list[str]]:
+    blocks: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        index = len(blocks)
+        blocks.append(match.group(0))
+        return f"\x00P{index}\x00"
+
+    return _PREPROCESSOR_BLOCK_RE.sub(replace, code), blocks
+
+
+def _restore_preprocessor(code: str, blocks: list[str]) -> str:
+    return re.sub(r"\x00P(\d+)\x00", lambda match: blocks[int(match.group(1))], code)

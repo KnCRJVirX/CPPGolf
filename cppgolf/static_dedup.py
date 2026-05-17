@@ -22,6 +22,8 @@ import re
 import sys
 import tempfile
 
+from .clang_args import MissingClangError, build_clang_parse_args, load_clang_cindex
+
 
 def _body_hash(src: bytes, start: int, end: int) -> str:
     text = src[start:end + 1].decode('utf-8', 'replace')
@@ -87,7 +89,7 @@ def _collect_static_defs(
 
     返回 by_name[name] = [(start_byte, end_byte, body_hash), ...]
     """
-    import clang.cindex as ci  # noqa: PLC0415
+    ci = load_clang_cindex('static deduplication')
 
     _STATIC = getattr(getattr(ci, 'StorageClass', None), 'STATIC', None)
     _DEF_KINDS: frozenset = frozenset({ci.CursorKind.FUNCTION_DECL,  # type: ignore
@@ -313,6 +315,7 @@ def deduplicate_static_defs(
     code: str,
     lang: str = 'c++',
     extra_args: list[str] | None = None,
+    platform: str | None = None,
     verbose: bool = False,
     max_iterations: int = 20,
     file_ranges: list[tuple[int, int, str]] | None = None,
@@ -332,16 +335,13 @@ def deduplicate_static_defs(
                   从根本上解决"领地过大"导致的无限迭代问题。
     """
     try:
-        import clang.cindex as ci  # noqa: PLC0415, F401
-    except ImportError:
+        load_clang_cindex('static deduplication')
+    except MissingClangError:
         print('[static_dedup] 警告：找不到 libclang，跳过去重', file=sys.stderr)
         return code
 
-    suffix   = '.c' if lang == 'c' else '.cpp'
     std_flag = '-std=c17' if lang == 'c' else '-std=c++17'
-    args = [std_flag, '-w', '-fno-spell-checking']
-    if extra_args:
-        args.extend(extra_args)
+    args = build_clang_parse_args(lang=lang, std=std_flag, extra_args=extra_args, platform=platform)
 
     total_removed = total_renamed = 0
     current = code

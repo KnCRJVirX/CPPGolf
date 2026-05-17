@@ -1,31 +1,49 @@
-"""
-cppgolf — C++ multi-file merge & code golf tool
+"""Public package API for cppgolf."""
 
-公开 API：
-    process(input_file, include_dirs, **options) -> str
-    golf_rename_symbols(code) -> str
-    strip_comments(code) -> str
-    merge_files(filepath, include_dirs, visited, sys_includes) -> str
-    compress_whitespace(code) -> str
-    golf_std_namespace / golf_typedefs / golf_endl_to_newline /
-    golf_remove_main_return / golf_remove_inline /
-    golf_braces_single_stmt / golf_define_shortcuts
-"""
+from __future__ import annotations
 
-from .strip_comments import strip_comments
 from .merge import merge_files, strip_include_guard
-from .whitespace import compress_whitespace
+from .strip_comments import strip_comments
 from .transforms import (
-    golf_std_namespace,
-    golf_typedefs,
-    golf_remove_main_return,
-    golf_endl_to_newline,
-    golf_remove_inline,
     golf_braces_single_stmt,
     golf_define_shortcuts,
+    golf_endl_to_newline,
+    golf_remove_inline,
+    golf_remove_main_return,
+    golf_std_namespace,
+    golf_typedefs,
+    golf_windows_lean,
 )
-from .golf_rename import golf_rename_symbols
-from .__main__ import process
+from .whitespace import compress_whitespace
+
+
+def process(*args, **kwargs):
+    """Lazy wrapper around the main processing pipeline."""
+    from .__main__ import process as impl
+
+    return impl(*args, **kwargs)
+
+
+def golf_rename_symbols(*args, **kwargs):
+    """Lazy wrapper around the libclang-backed symbol renamer."""
+    from .golf_rename import golf_rename_symbols as impl
+
+    return impl(*args, **kwargs)
+
+
+def flatten_control_flow(*args, **kwargs):
+    """Lazy wrapper around the libclang-backed CFG flattener."""
+    from .control_flow_flatten import flatten_control_flow as impl
+
+    return impl(*args, **kwargs)
+
+
+def insert_flowers(*args, **kwargs):
+    """Lazy wrapper around the helper-backed flower obfuscator."""
+    from .flower import insert_flowers as impl
+
+    return impl(*args, **kwargs)
+
 
 __all__ = [
     "process",
@@ -38,9 +56,12 @@ __all__ = [
     "golf_remove_main_return",
     "golf_endl_to_newline",
     "golf_remove_inline",
+    "golf_windows_lean",
     "golf_braces_single_stmt",
     "golf_define_shortcuts",
     "golf_rename_symbols",
+    "flatten_control_flow",
+    "insert_flowers",
 ]
 
-__version__ = "0.1.8"
+__version__ = "0.1.10"

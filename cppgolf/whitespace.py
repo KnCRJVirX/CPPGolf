@@ -4,10 +4,9 @@ import re
 _IDENT_END   = re.compile(r'[A-Za-z0-9_]$')
 _IDENT_START = re.compile(r'^[A-Za-z0-9_]')
 
-# 完整预处理行（含续行 \）
-# 注意：用 (?:[^\n\\]|\\.)* 代替 [^\n]* ，防止行末的 \ 被贪婪吞掉
-# 导致 (?:\\\n...) 无法匹配续行
-_PP_LINE_RE = re.compile(r'[ \t]*#(?:[^\n\\]|\\.)*(?:\\\n(?:[^\n\\]|\\.)*)*')
+# 完整预处理逻辑行（含续行 \）
+# 必须锚定到行首，避免把普通代码里的 # 误识别成预处理指令。
+_PP_LINE_RE = re.compile(r'(?m)^[ \t]*#(?:[^\n\\]|\\.)*(?:\\\n(?:[^\n\\]|\\.)*)*')
 
 # token 正则
 _TOKENIZE_RE = re.compile(
@@ -33,6 +32,9 @@ def _needs_space(a: str, b: str) -> bool:
     if _IDENT_END.search(a) and _IDENT_START.match(b):
         return True
     if a[-1] in '+-' and b[0] == a[-1]:
+        return True
+    # Prevent template closers followed by assignment from collapsing into >= or >>=.
+    if a in ('>', '>>') and b == '=':
         return True
     return False
 
@@ -89,13 +91,11 @@ def _extract_strings(src: str) -> tuple[str, list]:
 
 def compress_whitespace(code: str) -> str:
     """
-    1. 提取字符串字面量 → \\x02S{n}\\x02
-    2. 提取预处理行    → \\x01PP{n}\\x01
+    1. 提取预处理逻辑行 → \\x01PP{n}\\x01
+    2. 提取字符串字面量 → \\x02S{n}\\x02
     3. token 级空白最小化
     4. 还原 PP 行 / 字符串字面量
     """
-    code_no_str, str_lits = _extract_strings(code)
-
     pp_lines: list = []
 
     def replace_pp(m):
@@ -103,9 +103,10 @@ def compress_whitespace(code: str) -> str:
         pp_lines.append(m.group(0).strip())
         return f'\x01PP{idx}\x01'
 
-    code_no_pp = _PP_LINE_RE.sub(replace_pp, code_no_str)
+    code_no_pp = _PP_LINE_RE.sub(replace_pp, code)
+    code_no_str, str_lits = _extract_strings(code_no_pp)
 
-    tokens = _tokenize(code_no_pp)
+    tokens = _tokenize(code_no_str)
     out: list = []
     prev_val = ''
     pending_space = False
@@ -120,11 +121,11 @@ def compress_whitespace(code: str) -> str:
             prev_val = val
 
     code_min = ''.join(out)
-    code_min = re.sub(r'\x01PP(\d+)\x01',
-                      lambda m: '\n' + pp_lines[int(m.group(1))] + '\n',
-                      code_min)
     code_min = re.sub(r'\x02S(\d+)\x02',
                       lambda m: str_lits[int(m.group(1))],
+                      code_min)
+    code_min = re.sub(r'\x01PP(\d+)\x01',
+                      lambda m: '\n' + pp_lines[int(m.group(1))] + '\n',
                       code_min)
     code_min = re.sub(r'\n{2,}', '\n', code_min)
     return code_min.strip()

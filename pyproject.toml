@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cppgolf"
-version = "0.1.8"
+version = "0.1.10"
 description = "C++ multi-file merge & code golf / minifier tool"
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "libclang",
+    "tomli; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
