@@ -7,6 +7,7 @@ from cppgolf.transforms import (
     golf_remove_main_return,
     golf_std_namespace,
     golf_typedefs,
+    golf_windows_lean,
 )
 
 
@@ -83,6 +84,23 @@ def test_std_namespace_skips_unsafe_std_patterns():
     )
     result = golf_std_namespace(code)
     assert result == code
+
+
+def test_windows_lean_protects_psapi_include_order():
+    code = "#include <windows.h>\n#include <psapi.h>\n"
+
+    result = golf_windows_lean(code)
+
+    assert "#include <windows.h>\n// cppgolf: keep psapi.h after windows.h\n#include <psapi.h>" in result
+    assert result.find("#include <windows.h>") < result.find("#include <psapi.h>")
+
+
+def test_windows_lean_protects_psapi_include_order_across_blank_lines():
+    code = "#include <windows.h>\n\n\n#include <psapi.h>\n"
+
+    result = golf_windows_lean(code)
+
+    assert "#include <windows.h>\n// cppgolf: keep psapi.h after windows.h\n#include <psapi.h>" in result
 
 
 def test_typedefs_do_not_touch_literals():

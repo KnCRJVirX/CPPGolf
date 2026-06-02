@@ -388,11 +388,28 @@ def _normalize_declaration_boundary(code: str, offset: int) -> int:
         index += 1
     if index < len(code) and code[index] == ";":
         return index + 1
+    if _is_inside_using_pack_declaration(code, offset):
+        semicolon = code.find(";", index)
+        if semicolon >= 0:
+            return semicolon + 1
     if index < len(code) and code[index] == ",":
         semicolon = code.find(";", index + 1)
         if semicolon >= 0:
             return semicolon + 1
     return offset
+
+
+def _is_inside_using_pack_declaration(code: str, offset: int) -> bool:
+    semicolon = code.find(";", offset)
+    if semicolon < 0:
+        return False
+    tail = code[offset:semicolon]
+    if "..." not in tail:
+        return False
+    prefix = code[max(0, offset - 256):offset]
+    boundary = max(prefix.rfind(";"), prefix.rfind("{"), prefix.rfind("}"))
+    fragment = prefix[boundary + 1:]
+    return re.search(r"\busing\s+[^;{}=]+::[^;{}=]*$", fragment, re.DOTALL) is not None
 
 
 def _matches_any(qualified_name: str, simple_name: str, patterns: list[str]) -> bool:

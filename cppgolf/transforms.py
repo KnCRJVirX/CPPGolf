@@ -216,8 +216,21 @@ def golf_windows_lean(code: str) -> str:
         inject += "#ifndef _HAS_STD_BYTE\n#define _HAS_STD_BYTE 0\n#endif\n"
 
     if not inject:
-        return code
-    return code[:match.start()] + inject + code[match.start():]
+        return _protect_windows_dependent_include_order(code)
+    code = code[:match.start()] + inject + code[match.start():]
+    return _protect_windows_dependent_include_order(code)
+
+
+def _protect_windows_dependent_include_order(code: str) -> str:
+    """Keep clang-format from sorting dependent Windows headers before windows.h."""
+    return re.sub(
+        r"(?im)"
+        r"(^[ \t]*#[ \t]*include[ \t]*<[Ww]indows\.h>[ \t]*(?:\r?\n))"
+        r"(?:^[ \t]*(?:\r?\n))*"
+        r"(?=^[ \t]*#[ \t]*include[ \t]*<[Pp]sapi\.h>[ \t]*(?:\r?\n|$))",
+        r"\1// cppgolf: keep psapi.h after windows.h\n",
+        code,
+    )
 
 
 def golf_braces_single_stmt(code: str) -> str:

@@ -16,6 +16,7 @@ from cppgolf.flower import (
     _dead_code_edits,
     _declaration_edits,
     _namespace_declaration_template,
+    _normalize_declaration_boundary,
     insert_flowers,
 )
 
@@ -162,6 +163,15 @@ def test_declaration_edits_use_multiple_scope_offsets():
     assert {edit.offset for edit in edits} == {first, second, end}
 
 
+def test_normalize_declaration_boundary_skips_using_pack_expansion():
+    code = "template <typename... Ts> struct overload : Ts... {\n  using Ts::\n  operator()...;\n};\n"
+    offset = code.index("operator()")
+
+    normalized = _normalize_declaration_boundary(code, offset)
+
+    assert normalized == code.index(";") + 1
+
+
 @pytest.mark.skipif(GPP is None, reason="g++ not available")
 def test_declaration_templates_are_diverse_and_compile_in_namespace_and_class():
     namespace_decls = "".join(
@@ -268,6 +278,33 @@ def test_insert_flowers_declarations_skip_class_template_specializations():
 
     assert run.returncode == 0, run.stderr
     assert "Box<int> static" not in result
+
+
+@pytest.mark.skipif(GPP is None, reason="g++ not available")
+def test_insert_flowers_declarations_do_not_split_using_pack_expansion():
+    helper = _require_helper()
+    code = (
+        "#include <string>\n"
+        "template <typename... Ts> struct overload : Ts... {\n"
+        "  using Ts::\n"
+        "  operator()...;\n"
+        "};\n"
+        "template <typename... Ts> overload(Ts...) -> overload<Ts...>;\n"
+        "int main(){return 0;}\n"
+    )
+
+    result = insert_flowers(
+        code,
+        dead_code=False,
+        declarations=True,
+        seed=41,
+        declaration_count=8,
+        helper_path=helper,
+    )
+    run = _compile_and_run_cpp(result)
+
+    assert run.returncode == 0, run.stderr
+    assert "using Ts::\n  operator() static" not in result
 
 
 @pytest.mark.skipif(GPP is None, reason="g++ not available")
